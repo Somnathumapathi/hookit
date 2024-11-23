@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github/Somnathumapathi/gofrhack/models"
+	"io"
+	"mime/multipart"
+	"os"
 	"strings"
 
 	"gofr.dev/pkg/gofr"
@@ -295,16 +298,122 @@ func GetWorkflow(ctx *gofr.Context) (interface{}, error) {
 	return workflow, nil
 }
 
-func webhookHandler(ctx *gofr.Context) (interface{}, error) {
-	workflowID := ctx.Param("workflowId") // Extract the workflow ID from the URL
-	var payload map[string]interface{}    // Generic map to hold the webhook payload
+// func webhookHandler(ctx *gofr.Context) (interface{}, error) {
+// 	workflowID := ctx.Param("workflowId") // Extract the workflow ID from the URL
+// 	var payload map[string]interface{}    // Generic map to hold the webhook payload
 
-	err := ctx.Bind(&payload)
+// 	err := ctx.Bind(&payload)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("invalid webhook payload: %w", err)
+// 	}
+
+// 	// Fetch the workflow details
+// 	var workflow Workflow
+// 	query := `SELECT id, name, webhook_url FROM workflows WHERE id = $1`
+// 	err = ctx.SQL.QueryRowContext(ctx, query, workflowID).Scan(&workflow.Id, &workflow.Name, &workflow.WebookUrl)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("workflow not found: %w", err)
+// 	}
+
+// 	// Fetch steps for the workflow
+// 	query = `SELECT id, name, step_type, payload, step_order FROM steps WHERE workflow_id = $1 ORDER BY step_order`
+// 	rows, err := ctx.SQL.QueryContext(ctx, query, workflowID)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to fetch workflow steps: %w", err)
+// 	}
+// 	defer rows.Close()
+
+// 	steps := []Step{}
+// 	for rows.Next() {
+// 		var step Step
+// 		var payloadJSON string
+// 		err = rows.Scan(&step.ID, &step.Name, &step.Type, &payloadJSON, &step.StepOrder)
+// 		if err != nil {
+// 			return nil, fmt.Errorf("failed to parse step data: %w", err)
+// 		}
+
+// 		// Decode the JSON payload into the step's Payload field
+// 		err = json.Unmarshal([]byte(payloadJSON), &step.Payload)
+// 		if err != nil {
+// 			return nil, fmt.Errorf("invalid step payload: %w", err)
+// 		}
+
+// 		steps = append(steps, step)
+// 	}
+
+// 	workflow.Steps = steps
+
+// 	// Execute the workflow
+// 	err = executeWorkflow(ctx, workflow, payload)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to execute workflow: %w", err)
+// 	}
+
+// 	return "Workflow executed successfully", nil
+// }
+
+// func executeWorkflow(ctx *gofr.Context, workflow Workflow, input map[string]interface{}) error {
+// 	var intermediateData map[string]interface{} = input
+
+// 	for _, step := range workflow.Steps {
+// 		var err error
+// 		switch step.Type {
+// 		case "trigger":
+// 			intermediateData, err = executeTrigger(step, intermediateData)
+// 		case "parse":
+// 			intermediateData, err = executeParse(step, intermediateData)
+// 		case "action":
+// 			err = executeAction(step, intermediateData)
+// 		default:
+// 			return fmt.Errorf("unknown step type: %s", step.Type)
+// 		}
+
+// 		if err != nil {
+// 			return fmt.Errorf("step '%s' failed: %w", step.Name, err)
+// 		}
+// 	}
+
+// 	return nil
+// }
+
+// func executeTrigger(step Step, input map[string]interface{}) (map[string]interface{}, error) {
+// 	// Process trigger logic
+// 	return input, nil
+// }
+
+// func executeParse(step Step, input map[string]interface{}) (map[string]interface{}, error) {
+// 	// Process parse logic (e.g., JSON to CSV conversion)
+// 	// Use step.Payload for configurations like input/output formats
+// 	return input, nil
+// }
+
+// func executeAction(step Step, input map[string]interface{}) error {
+// 	// Perform external action (e.g., API call, email sending)
+// 	// Use step.Payload for action-specific parameters
+// 	return nil
+// }
+
+func webhookHandler(ctx *gofr.Context) (interface{}, error) {
+	workflowID := ctx.Param("workflowId")
+	var payload map[string]interface{}
+
+	// Parse the incoming multipart form-data
+	fileHeader, _, err := parseMultipartRequest(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("invalid webhook payload: %w", err)
+		return nil, fmt.Errorf("failed to parse multipart request: %w", err)
 	}
 
-	// Fetch the workflow details
+	// Save the uploaded file temporarily
+	tempFilePath := "tmp/uploaded_file"
+	if fileHeader != nil {
+		err = saveUploadedFile(fileHeader, tempFilePath)
+		if err != nil {
+			return nil, fmt.Errorf("error saving uploaded file: %w", err)
+		}
+		defer os.Remove(tempFilePath) // Clean up after use
+	}
+
+	// Fetch workflow details
 	var workflow Workflow
 	query := `SELECT id, name, webhook_url FROM workflows WHERE id = $1`
 	err = ctx.SQL.QueryRowContext(ctx, query, workflowID).Scan(&workflow.Id, &workflow.Name, &workflow.WebookUrl)
@@ -312,7 +421,7 @@ func webhookHandler(ctx *gofr.Context) (interface{}, error) {
 		return nil, fmt.Errorf("workflow not found: %w", err)
 	}
 
-	// Fetch steps for the workflow
+	// Fetch workflow steps
 	query = `SELECT id, name, step_type, payload, step_order FROM steps WHERE workflow_id = $1 ORDER BY step_order`
 	rows, err := ctx.SQL.QueryContext(ctx, query, workflowID)
 	if err != nil {
@@ -329,7 +438,6 @@ func webhookHandler(ctx *gofr.Context) (interface{}, error) {
 			return nil, fmt.Errorf("failed to parse step data: %w", err)
 		}
 
-		// Decode the JSON payload into the step's Payload field
 		err = json.Unmarshal([]byte(payloadJSON), &step.Payload)
 		if err != nil {
 			return nil, fmt.Errorf("invalid step payload: %w", err)
@@ -337,11 +445,10 @@ func webhookHandler(ctx *gofr.Context) (interface{}, error) {
 
 		steps = append(steps, step)
 	}
-
 	workflow.Steps = steps
 
-	// Execute the workflow
-	err = executeWorkflow(ctx, workflow, payload)
+	// Execute the workflow with the uploaded file or other payload data
+	err = executeWorkflow(ctx, workflow, payload, tempFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute workflow: %w", err)
 	}
@@ -349,8 +456,41 @@ func webhookHandler(ctx *gofr.Context) (interface{}, error) {
 	return "Workflow executed successfully", nil
 }
 
-func executeWorkflow(ctx *gofr.Context, workflow Workflow, input map[string]interface{}) error {
-	var intermediateData map[string]interface{} = input
+// Parses a multipart request
+func parseMultipartRequest(ctx *gofr.Context) (*multipart.FileHeader, map[string]interface{}, error) {
+	var payload map[string]interface{}
+	err := ctx.Bind(&payload)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid webhook payload: %w", err)
+	}
+
+	fileHeader := ctx.FileHeader("file")
+	return fileHeader, payload, nil
+}
+
+// Saves an uploaded file to the local filesystem
+func saveUploadedFile(fileHeader *multipart.FileHeader, filePath string) error {
+	file, err := fileHeader.Open()
+	if err != nil {
+		return fmt.Errorf("error opening uploaded file: %w", err)
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return fmt.Errorf("error reading uploaded file content: %w", err)
+	}
+
+	err = os.WriteFile(filePath, content, 0644)
+	if err != nil {
+		return fmt.Errorf("error saving uploaded file: %w", err)
+	}
+	return nil
+}
+
+// Executes the workflow with the provided input data and steps
+func executeWorkflow(ctx *gofr.Context, workflow Workflow, input map[string]interface{}, tempFilePath string) error {
+	intermediateData := input
 
 	for _, step := range workflow.Steps {
 		var err error
@@ -358,7 +498,7 @@ func executeWorkflow(ctx *gofr.Context, workflow Workflow, input map[string]inte
 		case "trigger":
 			intermediateData, err = executeTrigger(step, intermediateData)
 		case "parse":
-			intermediateData, err = executeParse(step, intermediateData)
+			intermediateData, err = executeParse(step, intermediateData, tempFilePath)
 		case "action":
 			err = executeAction(step, intermediateData)
 		default:
@@ -373,19 +513,24 @@ func executeWorkflow(ctx *gofr.Context, workflow Workflow, input map[string]inte
 	return nil
 }
 
+// Trigger step execution
 func executeTrigger(step Step, input map[string]interface{}) (map[string]interface{}, error) {
 	// Process trigger logic
 	return input, nil
 }
 
-func executeParse(step Step, input map[string]interface{}) (map[string]interface{}, error) {
-	// Process parse logic (e.g., JSON to CSV conversion)
-	// Use step.Payload for configurations like input/output formats
+// Parse step execution
+func executeParse(step Step, input map[string]interface{}, filePath string) (map[string]interface{}, error) {
+	// Example: Convert JSON to CSV, or process file-specific logic
+	if _, ok := step.Payload["format"].(string); ok {
+		fmt.Printf("Parsing file %s with format %s\n", filePath, step.Payload["format"].(string))
+	}
 	return input, nil
 }
 
+// Action step execution
 func executeAction(step Step, input map[string]interface{}) error {
-	// Perform external action (e.g., API call, email sending)
-	// Use step.Payload for action-specific parameters
+	// Example: Make API calls or perform specific actions
+	fmt.Printf("Performing action '%s' with payload %v\n", step.Name, step.Payload)
 	return nil
 }
