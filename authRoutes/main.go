@@ -3,6 +3,7 @@ package authRoutes
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"github/Somnathumapathi/gofrhack/models"
 	"net/http"
 	"strconv"
 	"time"
@@ -46,7 +47,7 @@ func GenerateRandomAPIKey() (string, error) {
 }
 
 func RegisterUser(ctx *gofr.Context) (interface{}, error) {
-	var user UserRequestData
+	var user models.UserRequestData
 	err := ctx.Bind(&user)
 	if err != nil {
 		return nil, err
@@ -110,7 +111,7 @@ func RegisterUser(ctx *gofr.Context) (interface{}, error) {
 }
 
 func LoginUser(ctx *gofr.Context) (interface{}, error) {
-	var loginBody LoginBody
+	var loginBody models.LoginBody
 	err := ctx.Bind(&loginBody)
 	if err != nil {
 		return nil, err
@@ -123,9 +124,9 @@ func LoginUser(ctx *gofr.Context) (interface{}, error) {
 		return nil, queryErr
 	}
 
-	var users []User
+	var users []models.User
 	for rows.Next() {
-		var user User
+		var user models.User
 		if err := rows.Scan(&user.Id, &user.Name, &user.Email, &user.HashPass); err != nil {
 			return nil, err
 		}
@@ -163,9 +164,11 @@ func LoginUser(ctx *gofr.Context) (interface{}, error) {
 				// If there is an error in creating the JWT return an internal server error
 				return nil, err
 			}
-			response := make(map[string]string)
-			response["token"] = tokenString
-			response["description"] = "User created and logged in successfully"
+			response := map[string]interface{}{
+				"token":       tokenString,
+				"description": "User created and logged in successfully",
+				"data":        user,
+			}
 			return response, nil
 		}
 	}

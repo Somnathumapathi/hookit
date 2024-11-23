@@ -88,7 +88,8 @@ func main() {
 	})
 	app.POST("/user/register", authRoutes.RegisterUser)
 	app.POST("/workflow/create", workflowRoutes.CreateWorkflow)
-
+	app.GET("/workflow/{id}", workflowRoutes.GetWorkflow)
+	app.PUT("/workflow/{id}", workflowRoutes.UpdateWorkflow)
 	app.Run()
 
 }
