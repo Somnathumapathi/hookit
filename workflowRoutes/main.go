@@ -294,3 +294,98 @@ func GetWorkflow(ctx *gofr.Context) (interface{}, error) {
 	// Return the workflow
 	return workflow, nil
 }
+
+func webhookHandler(ctx *gofr.Context) (interface{}, error) {
+	workflowID := ctx.Param("workflowId") // Extract the workflow ID from the URL
+	var payload map[string]interface{}    // Generic map to hold the webhook payload
+
+	err := ctx.Bind(&payload)
+	if err != nil {
+		return nil, fmt.Errorf("invalid webhook payload: %w", err)
+	}
+
+	// Fetch the workflow details
+	var workflow Workflow
+	query := `SELECT id, name, webhook_url FROM workflows WHERE id = $1`
+	err = ctx.SQL.QueryRowContext(ctx, query, workflowID).Scan(&workflow.Id, &workflow.Name, &workflow.WebookUrl)
+	if err != nil {
+		return nil, fmt.Errorf("workflow not found: %w", err)
+	}
+
+	// Fetch steps for the workflow
+	query = `SELECT id, name, step_type, payload, step_order FROM steps WHERE workflow_id = $1 ORDER BY step_order`
+	rows, err := ctx.SQL.QueryContext(ctx, query, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch workflow steps: %w", err)
+	}
+	defer rows.Close()
+
+	steps := []Step{}
+	for rows.Next() {
+		var step Step
+		var payloadJSON string
+		err = rows.Scan(&step.ID, &step.Name, &step.Type, &payloadJSON, &step.StepOrder)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse step data: %w", err)
+		}
+
+		// Decode the JSON payload into the step's Payload field
+		err = json.Unmarshal([]byte(payloadJSON), &step.Payload)
+		if err != nil {
+			return nil, fmt.Errorf("invalid step payload: %w", err)
+		}
+
+		steps = append(steps, step)
+	}
+
+	workflow.Steps = steps
+
+	// Execute the workflow
+	err = executeWorkflow(ctx, workflow, payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute workflow: %w", err)
+	}
+
+	return "Workflow executed successfully", nil
+}
+
+func executeWorkflow(ctx *gofr.Context, workflow Workflow, input map[string]interface{}) error {
+	var intermediateData map[string]interface{} = input
+
+	for _, step := range workflow.Steps {
+		var err error
+		switch step.Type {
+		case "trigger":
+			intermediateData, err = executeTrigger(step, intermediateData)
+		case "parse":
+			intermediateData, err = executeParse(step, intermediateData)
+		case "action":
+			err = executeAction(step, intermediateData)
+		default:
+			return fmt.Errorf("unknown step type: %s", step.Type)
+		}
+
+		if err != nil {
+			return fmt.Errorf("step '%s' failed: %w", step.Name, err)
+		}
+	}
+
+	return nil
+}
+
+func executeTrigger(step Step, input map[string]interface{}) (map[string]interface{}, error) {
+	// Process trigger logic
+	return input, nil
+}
+
+func executeParse(step Step, input map[string]interface{}) (map[string]interface{}, error) {
+	// Process parse logic (e.g., JSON to CSV conversion)
+	// Use step.Payload for configurations like input/output formats
+	return input, nil
+}
+
+func executeAction(step Step, input map[string]interface{}) error {
+	// Perform external action (e.g., API call, email sending)
+	// Use step.Payload for action-specific parameters
+	return nil
+}
