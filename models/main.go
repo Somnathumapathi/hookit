@@ -6,6 +6,7 @@ type User struct {
 	Email    string `json:"email"`
 	HashPass string `json:"hash_pass"`
 	Api_key  string `json:"api_key"`
+	Credits  int    `json:"credits"`
 }
 
 type UserRequestData struct {

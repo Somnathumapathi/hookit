@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"github/Somnathumapathi/gofrhack/authRoutes"
+	"github/Somnathumapathi/gofrhack/cmRoutes"
 	"github/Somnathumapathi/gofrhack/workflowRoutes"
 	"net/http"
 	"strings"
@@ -87,9 +88,12 @@ func main() {
 		return "Hello World!", nil
 	})
 	app.POST("/user/register", authRoutes.RegisterUser)
+	app.POST("/user/login", authRoutes.LoginUser)
 	app.POST("/workflow/create", workflowRoutes.CreateWorkflow)
 	app.GET("/workflow/{id}", workflowRoutes.GetWorkflow)
+	app.GET("/workflow/", workflowRoutes.GetWorkflow)
 	app.PUT("/workflow/{id}", workflowRoutes.UpdateWorkflow)
+	app.POST("/buyCredits", cmRoutes.AddCreditsHandler)
 	app.Run()
 
 }

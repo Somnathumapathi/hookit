@@ -66,7 +66,7 @@ func RegisterUser(ctx *gofr.Context) (interface{}, error) {
 	}
 
 	if count > 0 {
-		return nil, errors.New("User already exists")
+		return nil, errors.New("User  already exists")
 	}
 
 	// Hash the password
@@ -80,8 +80,9 @@ func RegisterUser(ctx *gofr.Context) (interface{}, error) {
 		return nil, apiKeyErr
 	}
 
-	// Insert new user
-	_, insertErr := ctx.SQL.ExecContext(ctx, "INSERT INTO users (name,email,hash_pass,api_key) VALUES ($1,$2,$3,$4)", user.Name, user.Email, hashPassword, apiKey)
+	// Insert new user and retrieve the generated ID
+	var userID int
+	insertErr := ctx.SQL.QueryRowContext(ctx, "INSERT INTO users (name,email,hash_pass,api_key) VALUES ($1,$2,$3,$4) RETURNING id", user.Name, user.Email, hashPassword, apiKey).Scan(&userID)
 	if insertErr != nil {
 		return nil, insertErr
 	}
@@ -100,12 +101,20 @@ func RegisterUser(ctx *gofr.Context) (interface{}, error) {
 		return nil, tokenErr
 	}
 
+	// Create a user response struct
+	userResponse := map[string]interface{}{
+		"id":      userID, // Use the generated ID from the insert
+		"name":    user.Name,
+		"email":   user.Email,
+		"api_key": apiKey,
+	}
+
 	// Success response
-	success := map[string]string{
-		"description": "User successfully created and logged in!",
+	success := map[string]interface{}{
+		"description": "User  successfully created and logged in!",
 		"token":       tokenString,
+		"user":        userResponse,
 		"statusCode":  strconv.Itoa(http.StatusOK),
-		// "data":
 	}
 	return success, nil
 }
@@ -118,7 +127,7 @@ func LoginUser(ctx *gofr.Context) (interface{}, error) {
 	}
 
 	//check if any user already exists with the same email
-	rows, queryErr := ctx.SQL.QueryContext(ctx, "SELECT * FROM users WHERE email=?", loginBody.Email)
+	rows, queryErr := ctx.SQL.QueryContext(ctx, "SELECT * FROM users WHERE email=$1", loginBody.Email)
 
 	if queryErr != nil {
 		return nil, queryErr
@@ -127,7 +136,7 @@ func LoginUser(ctx *gofr.Context) (interface{}, error) {
 	var users []models.User
 	for rows.Next() {
 		var user models.User
-		if err := rows.Scan(&user.Id, &user.Name, &user.Email, &user.HashPass); err != nil {
+		if err := rows.Scan(&user.Id, &user.Name, &user.Email, &user.HashPass, &user.Api_key, &user.Credits); err != nil {
 			return nil, err
 		}
 
@@ -167,7 +176,7 @@ func LoginUser(ctx *gofr.Context) (interface{}, error) {
 			response := map[string]interface{}{
 				"token":       tokenString,
 				"description": "User created and logged in successfully",
-				"data":        user,
+				"user":        user,
 			}
 			return response, nil
 		}
