@@ -19,9 +19,11 @@ Hookit is an ETL-based workflow automation platform designed to simplify data on
 ## How It Works  
 1. Upload data (e.g., CSV) to the provided webhook.  
 2. Define workflows in the UI with filters and credentials.  
-3. Automate data ingestion, transformation, and updates into the target database.  
+3. Automate data ingestion, transformation, and updates into the target database.
 
 ## Use Cases  
 - Onboard legacy data stored in different formats.  
 - Automate customer form data ingestion (e.g., Facebook Lead Ads).  
 - Schedule recurring data workflows with cron jobs.  
+
+## Frontend Repository [Link.](https://github.com/Somnathumapathi/hookit-fe)
