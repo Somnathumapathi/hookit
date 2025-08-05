@@ -40,26 +40,63 @@ func AddCredits(ctx *gofr.Context, userID int, creditsToAdd int) (string, error)
 }
 
 func AddCreditsHandler(ctx *gofr.Context) (interface{}, error) {
-	// Extract user ID and credits to add from the request
-	userIDStr := ctx.Request.Param("id")
-	creditsToAddStr := ctx.Request.Param("credits")
-
-	// Convert userID from string to int
-	userID, err := strconv.Atoi(userIDStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid user ID: %w", err) // Return an error if the conversion fails
+	// Parse request body to get user ID and credits
+	var requestBody struct {
+		UserID  int `json:"userId"`
+		Credits int `json:"credits"`
 	}
 
-	// Convert creditsToAdd from string to int
-	creditsToAdd, err := strconv.Atoi(creditsToAddStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid credits to add: %w", err) // Return an error if the conversion fails
+	if err := ctx.Bind(&requestBody); err != nil {
+		return nil, fmt.Errorf("invalid request body: %w", err)
 	}
+
+	// Validate inputs
+	if requestBody.UserID <= 0 {
+		return nil, fmt.Errorf("invalid user ID")
+	}
+	if requestBody.Credits <= 0 {
+		return nil, fmt.Errorf("credits must be greater than zero")
+	}
+
 	// Call the addCredits function
-	message, err := AddCredits(ctx, userID, creditsToAdd)
+	message, err := AddCredits(ctx, requestBody.UserID, requestBody.Credits)
 	if err != nil {
 		return nil, err
 	}
 
-	return message, nil
+	return map[string]interface{}{
+		"message":      message,
+		"userId":       requestBody.UserID,
+		"creditsAdded": requestBody.Credits,
+	}, nil
+}
+
+// GetUserCredits returns the current credit balance for a user
+func GetUserCredits(ctx *gofr.Context) (interface{}, error) {
+	userIDStr := ctx.Request.PathParam("userId")
+	if userIDStr == "" {
+		return nil, fmt.Errorf("user ID is required")
+	}
+
+	userID, err := strconv.Atoi(userIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid user ID: %w", err)
+	}
+
+	var credits int
+	var name string
+	var email string
+
+	query := `SELECT name, email, credits FROM users WHERE id = $1`
+	err = ctx.SQL.QueryRowContext(ctx, query, userID).Scan(&name, &email, &credits)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user credits: %w", err)
+	}
+
+	return map[string]interface{}{
+		"userId":  userID,
+		"name":    name,
+		"email":   email,
+		"credits": credits,
+	}, nil
 }

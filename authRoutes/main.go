@@ -136,7 +136,7 @@ func LoginUser(ctx *gofr.Context) (interface{}, error) {
 	var users []models.User
 	for rows.Next() {
 		var user models.User
-		if err := rows.Scan(&user.Id, &user.Name, &user.Email, &user.HashPass, &user.Api_key, &user.Credits); err != nil {
+		if err := rows.Scan(&user.Id, &user.Name, &user.Email, &user.HashPass, &user.Api_key, &user.Credits, &user.CreatedAt, &user.UpdatedAt); err != nil {
 			return nil, err
 		}
 

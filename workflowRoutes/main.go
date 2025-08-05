@@ -41,10 +41,30 @@ func GenerateWebhookUrl() (string, error) {
 
 func CreateWorkflow(ctx *gofr.Context) (interface{}, error) {
 	var workflow Workflow
-	uidStr := ctx.Request.Param("id") // Get uid as string
+
+	// Get user ID from request body or query params
+	uidStr := ctx.Request.Param("userId")
+	if uidStr == "" {
+		// Try to get from request body
+		var requestBody map[string]interface{}
+		if err := ctx.Bind(&requestBody); err == nil {
+			if userIdFloat, ok := requestBody["userId"].(float64); ok {
+				uidStr = fmt.Sprintf("%.0f", userIdFloat)
+			} else if userIdStr, ok := requestBody["userId"].(string); ok {
+				uidStr = userIdStr
+			}
+		}
+	}
+
+	if uidStr == "" {
+		return nil, fmt.Errorf("user ID is required")
+	}
 
 	// Convert uid from string to int
 	uid, err := strconv.Atoi(uidStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid user ID: %w", err)
+	}
 
 	err = ctx.Bind(&workflow)
 	if err != nil {
@@ -61,6 +81,7 @@ func CreateWorkflow(ctx *gofr.Context) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	for _, step := range workflow.Steps {
 		// Convert the map[string]string payload to JSON
 		payloadJSON, jsonErr := json.Marshal(step.Payload)
@@ -251,8 +272,8 @@ func DeleteRemovedSteps(ctx *gofr.Context, workflowID int, stepIDs []int) error 
 // }
 
 func GetWorkflows(ctx *gofr.Context) (interface{}, error) {
-	// Extract user ID from request parameters
-	uid := ctx.Request.Param("uid")
+	// Extract user ID from path parameters
+	uid := ctx.Request.PathParam("uid")
 	if uid == "" {
 		return nil, fmt.Errorf("user ID is required")
 	}
@@ -272,6 +293,36 @@ func GetWorkflows(ctx *gofr.Context) (interface{}, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse workflow data: %w", err)
 		}
+
+		// Fetch steps for this workflow
+		stepQuery := `SELECT id, name, step_type, payload, step_order FROM steps WHERE workflow_id = $1 ORDER BY step_order`
+		stepRows, err := ctx.SQL.QueryContext(ctx, stepQuery, workflow.Id)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch steps for workflow %d: %w", workflow.Id, err)
+		}
+
+		var steps []Step
+		for stepRows.Next() {
+			var step Step
+			var payloadJSON string
+			err := stepRows.Scan(&step.ID, &step.Name, &step.Type, &payloadJSON, &step.StepOrder)
+			if err != nil {
+				stepRows.Close()
+				return nil, fmt.Errorf("failed to parse step data: %w", err)
+			}
+
+			// Deserialize the JSON payload
+			err = json.Unmarshal([]byte(payloadJSON), &step.Payload)
+			if err != nil {
+				stepRows.Close()
+				return nil, fmt.Errorf("failed to deserialize step payload: %w", err)
+			}
+
+			steps = append(steps, step)
+		}
+		stepRows.Close()
+
+		workflow.Steps = steps
 		workflows = append(workflows, workflow)
 	}
 
@@ -328,6 +379,101 @@ func GetWorkflow(ctx *gofr.Context) (interface{}, error) {
 
 	// Return the workflow
 	return workflow, nil
+}
+
+// ExecuteWorkflow handles webhook execution
+func ExecuteWorkflow(ctx *gofr.Context) (interface{}, error) {
+	workflowID := ctx.Request.PathParam("workflowId")
+	if workflowID == "" {
+		return nil, fmt.Errorf("workflow ID is required")
+	}
+
+	// Parse the incoming request body as JSON
+	var payload map[string]interface{}
+	err := ctx.Bind(&payload)
+	if err != nil {
+		// If JSON binding fails, it might be a file upload, let's handle it as empty payload for now
+		payload = map[string]interface{}{
+			"triggerType": "webhook",
+		}
+	}
+
+	// Fetch workflow details using webhook_url as the key
+	var workflow Workflow
+	query := `SELECT id, name, webhook_url FROM workflows WHERE webhook_url = $1`
+	err = ctx.SQL.QueryRowContext(ctx, query, workflowID).Scan(&workflow.Id, &workflow.Name, &workflow.WebookUrl)
+	if err != nil {
+		return nil, fmt.Errorf("workflow not found: %w", err)
+	}
+
+	// Fetch workflow steps
+	stepQuery := `SELECT id, name, step_type, payload, step_order FROM steps WHERE workflow_id = $1 ORDER BY step_order`
+	rows, err := ctx.SQL.QueryContext(ctx, stepQuery, workflow.Id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch workflow steps: %w", err)
+	}
+	defer rows.Close()
+
+	var steps []Step
+	for rows.Next() {
+		var step Step
+		var payloadJSON string
+		err := rows.Scan(&step.ID, &step.Name, &step.Type, &payloadJSON, &step.StepOrder)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse step data: %w", err)
+		}
+
+		err = json.Unmarshal([]byte(payloadJSON), &step.Payload)
+		if err != nil {
+			return nil, fmt.Errorf("invalid step payload: %w", err)
+		}
+
+		steps = append(steps, step)
+	}
+	workflow.Steps = steps
+
+	// Execute the workflow
+	result, err := executeWorkflow(ctx, workflow, payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute workflow: %w", err)
+	}
+
+	return map[string]interface{}{
+		"status":     "success",
+		"workflowId": workflowID,
+		"result":     result,
+	}, nil
+}
+
+// executeWorkflow processes the workflow steps
+func executeWorkflow(ctx *gofr.Context, workflow Workflow, input map[string]interface{}) (interface{}, error) {
+	intermediateData := input
+
+	for _, step := range workflow.Steps {
+		switch step.Type {
+		case "trigger":
+			// Trigger step - just pass through the data
+			fmt.Printf("Executing trigger step: %s\n", step.Name)
+		case "parse":
+			// Parse step - transform data based on payload configuration
+			fmt.Printf("Executing parse step: %s\n", step.Name)
+			if inputType, ok := step.Payload["inputType"].(string); ok {
+				if outputType, ok := step.Payload["outputType"].(string); ok {
+					fmt.Printf("Transforming from %s to %s\n", inputType, outputType)
+					// Here you would implement the actual transformation logic
+					// For now, just log what would happen
+				}
+			}
+		case "action":
+			// Action step - perform some action like API call, database insert, etc.
+			fmt.Printf("Executing action step: %s\n", step.Name)
+			// Here you would implement the actual action logic
+		default:
+			return nil, fmt.Errorf("unknown step type: %s", step.Type)
+		}
+	}
+
+	return intermediateData, nil
 }
 
 // func webhookHandler(ctx *gofr.Context) (interface{}, error) {

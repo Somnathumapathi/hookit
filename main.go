@@ -4,6 +4,9 @@ import (
 	"context"
 	"github/Somnathumapathi/gofrhack/authRoutes"
 	"github/Somnathumapathi/gofrhack/cmRoutes"
+	"github/Somnathumapathi/gofrhack/cronRoutes"
+	"github/Somnathumapathi/gofrhack/services"
+	"github/Somnathumapathi/gofrhack/testRoutes"
 	"github/Somnathumapathi/gofrhack/workflowRoutes"
 	"net/http"
 	"strings"
@@ -82,18 +85,60 @@ func main() {
 	// initialise gofr object
 	app := gofr.New()
 
-	// register route greet
-	app.GET("/", func(ctx *gofr.Context) (interface{}, error) {
+	// Initialize and start cron service for scheduled workflows
+	cronService := services.NewCronService(app)
 
-		return "Hello World!", nil
+	// Start scheduled workflows when the server starts
+	// We'll do this after the server is running to ensure database connections are ready
+	go func() {
+		// Wait a moment for the server to fully initialize
+		// In a production setup, you'd want to use proper synchronization
+		// time.Sleep(2 * time.Second)
+
+		// Use a simple handler context to start cron jobs
+		// This is a workaround since we need a context with SQL access
+		app.GET("/internal/start-cron", func(ctx *gofr.Context) (interface{}, error) {
+			err := cronService.StartScheduledWorkflows(ctx)
+			if err != nil {
+				ctx.Logger.Errorf("Failed to start scheduled workflows: %v", err)
+				return map[string]string{"error": err.Error()}, nil
+			}
+			ctx.Logger.Info("Scheduled workflows service started successfully")
+			return map[string]string{"message": "Cron service started"}, nil
+		})
+	}()
+
+	// Public routes (no auth required)
+	app.GET("/", func(ctx *gofr.Context) (interface{}, error) {
+		return map[string]string{"message": "Hookit API Server is running!", "version": "1.0.0"}, nil
 	})
+
+	// Auth routes
 	app.POST("/user/register", authRoutes.RegisterUser)
 	app.POST("/user/login", authRoutes.LoginUser)
+
+	// Workflow routes (with auth middleware would be added here)
 	app.POST("/workflow/create", workflowRoutes.CreateWorkflow)
 	app.GET("/workflow/{id}", workflowRoutes.GetWorkflow)
-	app.GET("/workflow/", workflowRoutes.GetWorkflow)
+	app.GET("/workflows/{uid}", workflowRoutes.GetWorkflows) // List all workflows for a user
 	app.PUT("/workflow/{id}", workflowRoutes.UpdateWorkflow)
-	app.POST("/buyCredits", cmRoutes.AddCreditsHandler)
-	app.Run()
 
+	// Cron/Schedule management routes
+	app.GET("/scheduled-workflows", cronRoutes.GetScheduledWorkflows)
+	app.GET("/workflow/{workflowId}/executions", cronRoutes.GetWorkflowExecutions)
+	app.PUT("/workflow/{workflowId}/schedule", cronRoutes.ToggleWorkflowSchedule)
+
+	// Credit management
+	app.POST("/buyCredits", cmRoutes.AddCreditsHandler)
+	app.GET("/user/{userId}/credits", cmRoutes.GetUserCredits)
+
+	// Test/Demo routes for cron functionality
+	app.POST("/test/create-scheduled-workflow", testRoutes.CreateTestScheduledWorkflow)
+	app.POST("/test/execute/{workflowId}", testRoutes.TestCronExecution)
+	app.GET("/test/cron-status", testRoutes.GetCronStatus)
+
+	// Webhook execution endpoint
+	app.POST("/webhook/{workflowId}", workflowRoutes.ExecuteWorkflow)
+
+	app.Run()
 }
